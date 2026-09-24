@@ -303,6 +303,102 @@ main .btn:hover { background: var(--muted-bg); color: var(--ink); }
 .dialog .btn-primary { background: var(--brand); color: #fff; border-color: var(--brand); }
 .dialog .btn-primary:hover { background: var(--brand-dark); }
 
+/* ---------- 现场盘点 ---------- */
+.panel-stocktake { margin-top: 18px; }
+.stocktake-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stocktake-head h2 { font-size: 15px; }
+.stocktake-head-actions { display: flex; gap: 8px; }
+
+.stocktake-summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #fcfcfd;
+}
+.st-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  background: var(--muted-bg);
+  color: var(--ink-soft);
+}
+.st-chip strong { font-size: 14px; color: inherit; }
+.chip-match { background: var(--ok-bg); color: var(--ok); }
+.chip-mismatch { background: var(--error-bg); color: var(--error); }
+.chip-duplicate { background: #eef0ff; color: #3a3f9e; }
+.chip-offbook { background: #f3e9fc; color: #7a2fb0; }
+.chip-notcounted { background: var(--warn-bg); color: var(--warn); }
+.chip-undetermined { background: #fdeceb; color: var(--error); }
+.st-total { margin-left: auto; font-size: 12.5px; color: var(--ink-soft); align-self: center; }
+
+.st-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--muted-bg);
+  color: var(--ink-soft);
+}
+#stocktake-table .col-line { width: 42px; }
+#stocktake-table tr.st-match td { background: rgba(30, 125, 70, 0.05); }
+#stocktake-table tr.st-mismatch td { background: var(--error-bg); }
+#stocktake-table tr.st-duplicate td { background: #eef0ff; }
+#stocktake-table tr.st-offbook td { background: #f7effc; }
+#stocktake-table tr.st-notcounted td { background: var(--warn-bg); }
+#stocktake-table tr.st-undetermined td { background: #fdeceb; }
+#stocktake-table tr.st-match .st-badge { background: var(--ok-bg); color: var(--ok); }
+#stocktake-table tr.st-mismatch .st-badge { background: #f8c9c4; color: var(--error); }
+#stocktake-table tr.st-duplicate .st-badge { background: #dfe2ff; color: #3a3f9e; }
+#stocktake-table tr.st-offbook .st-badge { background: #e8d3f6; color: #7a2fb0; }
+#stocktake-table tr.st-notcounted .st-badge { background: #f7e2b1; color: var(--warn); }
+#stocktake-table tr.st-undetermined .st-badge { background: #f8c9c4; color: var(--error); }
+.st-note-cell { color: var(--ink-soft); font-size: 12.5px; }
+.muted { color: #98a2b3; }
+.stocktake-note {
+  padding: 10px 18px 14px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* 盘点弹窗 */
+.dialog-wide { width: min(620px, calc(100vw - 32px)); }
+.dialog-hint { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-soft); }
+.field-stock-minute { max-width: 220px; }
+.st-rows-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr 64px;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  margin: 4px 0 6px;
+}
+.st-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 64px;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.st-row input {
+  padding: 8px 10px;
+  border: 1px solid #cfd5de;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.st-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(29, 78, 137, 0.15);
+}
+.btn-add-row { margin: 2px 0 4px; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed;

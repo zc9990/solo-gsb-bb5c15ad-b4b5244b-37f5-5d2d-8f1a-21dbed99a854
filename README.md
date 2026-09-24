@@ -14,6 +14,7 @@ docker compose up -d --build
 
 - **应用地址：** <http://localhost:3000>
 - 核验结果接口（JSON）：<http://localhost:3000/api/verify>
+- 现场盘点接口（JSON，POST）：`POST http://localhost:3000/api/stocktake`
 
 停止：
 
@@ -52,6 +53,29 @@ PORT=8080 DATA_FILE=./data/store.json npm start
 - **录入交接记录**：选择道具、填写分钟（非负整数）、交出者、接收者（二者不可相同）、备注。
 - 道具与记录均可随时**修改、删除**；删除道具会级联删除其名下全部记录。
 - 每次增删改后自动重新核验，也可点击右上角「↻ 重新核验」手动重放。
+
+### 演出中途现场盘点（账实差异）
+
+点击顶栏「🧮 现场盘点」：
+
+1. 选择**盘点分钟**（非负整数）；
+2. **逐行填写道具名称与实物持有人**（可「＋ 增加一行」，道具名称支持从已登记清单下拉选择）；
+3. 提交后在结果表中查看该时刻的**账实差异**。
+
+账面口径：服务端**只重放该分钟及以前的交接**，沿用现有同分钟唯一链规则，在该分钟
+所有交接完成后取账面持有人；**较晚分钟的冲突不影响本次盘点**。盘点只生成即时结果，
+**不改写任何交接记录**。
+
+每行 / 每件道具唯一归类：
+
+| 结论 | 触发条件 |
+| --- | --- |
+| ✓ 一致 | 实物持有人与账面持有人相同 |
+| ✕ 持有人不符 | 实物持有人与账面持有人不同（结果中附账面持有人） |
+| ⧉ 重复录入 | 盘点行重名：每次出现各列一行，不以后项覆盖前项 |
+| ？ 账外 | 盘点行填写了未登记名称 |
+| — 未盘 | 已登记道具没有任何盘点行 |
+| ? 无法判定 | 已登记道具在该分钟及以前的交接链冲突 |
 
 ### 核验规则
 
@@ -97,10 +121,24 @@ PORT=8080 DATA_FILE=./data/store.json npm start
 | --- | --- | --- |
 | GET | `/api/state` | 全部数据 + 核验结果 |
 | GET | `/api/verify` | 仅核验结果 |
+| POST | `/api/stocktake` | 现场盘点（即时账实差异，只读不改写记录），请求体 `{"minute":3,"rows":[{"name":"青龙剑","holder":"李四"}]}` |
 | GET/POST | `/api/props` | 道具列表 / 新增道具 |
 | PUT/DELETE | `/api/props/:id` | 修改 / 删除道具（删除级联清理记录） |
 | GET/POST | `/api/records` | 记录列表 / 新增记录 |
 | PUT/DELETE | `/api/records/:id` | 修改 / 删除记录（修改保留原录入时间） |
+
+`POST /api/stocktake` 调用示例：
+
+```bash
+curl -X POST http://localhost:3000/api/stocktake \
+  -H 'Content-Type: application/json' \
+  -d '{"minute":3,"rows":[{"name":"青龙剑","holder":"李四"}]}'
+```
+
+返回 `cutoffMinute`、逐行 `entries`（`category` 取值：
+`MATCH` 一致 / `MISMATCH` 持有人不符 / `DUPLICATE` 重复录入 / `OFF_BOOK` 账外 /
+`NOT_COUNTED` 未盘 / `UNDETERMINED` 无法判定）及 `summary` 分类计数与 `hasDifference`。
+分钟必须是非负整数；每行名称与持有人均必填，完全空白的行会被忽略。
 
 ## 项目结构
 
@@ -112,12 +150,15 @@ PORT=8080 DATA_FILE=./data/store.json npm start
 ├── server.js                # Express 服务：静态页 + JSON API
 ├── src/
 │   ├── store.js             # 本地 JSON 存储（首次启动写入初始演示数据）
-│   └── verify.js            # 交接核验引擎（按分钟重放 / 冲突定位 / 时间轴）
+│   ├── verify.js            # 交接核验引擎（按分钟重放 / 冲突定位 / 时间轴）
+│   └── stocktake.js         # 现场盘点引擎（截断到盘点分钟重放，账实差异分类）
 ├── public/                  # 原生前端（无构建步骤）
 │   ├── index.html
 │   ├── styles.css
 │   └── app.js
-└── test/verify.test.js      # 核验引擎单元测试（node test）
+└── test/
+    ├── verify.test.js       # 核验引擎单元测试（node test）
+    └── stocktake.test.js    # 现场盘点引擎单元测试
 ```
 
 ## 运行测试
@@ -126,5 +167,9 @@ PORT=8080 DATA_FILE=./data/store.json npm start
 npm test
 ```
 
-覆盖：完整归仓链、同分钟多条可接续冲突、断链冲突、结束未归仓、同分钟链式交接
+核验引擎覆盖：完整归仓链、同分钟多条可接续冲突、断链冲突、结束未归仓、同分钟链式交接
 （含倒序录入）、无记录、时间轴分段、多道具独立核验、孤儿记录等 13 个用例。
+
+现场盘点覆盖：截断到盘点分钟重放、较晚冲突不影响本次盘点、同分钟链完成后取账面持有人、
+一致 / 持有人不符 / 重复录入（不以后项覆盖）/ 账外 / 未盘 / 无法判定分类、
+汇总计数与只读不改写记录等 14 个用例。

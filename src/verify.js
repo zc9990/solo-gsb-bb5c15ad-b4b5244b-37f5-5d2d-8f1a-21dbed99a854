@@ -13,6 +13,9 @@
  *    - 为 0：本分钟仍有未使用记录，却没有一条能从当前持有人交出
  *      => BROKEN（无法接续），定位这些记录，其后分钟的记录同样无法接续。
  * 3. 全部记录重放完毕后持有人仍不是仓库 => NOT_RETURNED（演出结束未归仓）。
+ *
+ * 现场盘点（stocktake）复用同一套重放核心，但只重放“盘点分钟及以前”的记录，
+ * 在该分钟所有交接完成后取账面持有人；盘点分钟之后的冲突不影响本次盘点。
  */
 
 const { WAREHOUSE } = require('./store');
@@ -47,11 +50,91 @@ function describeRecord(r) {
 }
 
 /**
+ * 重放核心：对一件道具的（已筛选、可截断到某分钟的）记录按分钟归约。
+ *
+ * @param {Array} records 该道具相关记录（调用方负责过滤 propId 与盘点分钟截断）
+ * @returns {{
+ *   holder: string, chain: Array, conflict: null|{type,minute,holder,records,recordRefs,reason},
+ *   totalCount: number, replayedCount: number
+ * }}
+ */
+function replayRecords(records) {
+  const sorted = sortRecords(records);
+  const chain = [];
+  let holder = WAREHOUSE;
+  let i = 0;
+
+  while (i < sorted.length) {
+    const minute = sorted[i].minute;
+
+    // 本分钟全部记录，作为尚未使用的有向边集合
+    let pool = [];
+    while (i < sorted.length && sorted[i].minute === minute) {
+      pool.push(sorted[i]);
+      i += 1;
+    }
+
+    // 同一分钟内从当前持有人沿“唯一出边”反复归约，与录入顺序无关
+    while (pool.length > 0) {
+      const continuable = pool.filter((r) => r.from === holder);
+
+      if (continuable.length === 0) {
+        return {
+          holder,
+          chain,
+          conflict: {
+            type: CONFLICT.BROKEN,
+            minute,
+            holder,
+            records: pool.map((r) => r.id),
+            recordRefs: pool,
+            reason:
+              `第${minute}分钟道具当前由「${holder}」持有，但该分钟尚未执行的交接记录为` +
+              `${pool.map(describeRecord).join('；')}——交出者均不是「${holder}」，` +
+              `交接链在此断裂，本分钟剩余记录及之后分钟的记录均无法接续。`,
+          },
+          totalCount: sorted.length,
+          replayedCount: chain.length,
+        };
+      }
+
+      if (continuable.length > 1) {
+        return {
+          holder,
+          chain,
+          conflict: {
+            type: CONFLICT.AMBIGUOUS,
+            minute,
+            holder,
+            records: continuable.map((r) => r.id),
+            recordRefs: continuable,
+            reason:
+              `第${minute}分钟道具由「${holder}」持有，同时存在 ${continuable.length} 条` +
+              `交出者为「${holder}」的可接续记录（${continuable
+                .map((r) => `${r.from} → ${r.to}`)
+                .join('；')}），交接链不唯一，无法判定道具实际交给了谁。`,
+          },
+          totalCount: sorted.length,
+          replayedCount: chain.length,
+        };
+      }
+
+      const rec = continuable[0];
+      chain.push(rec);
+      holder = rec.to;
+      pool = pool.filter((r) => r.id !== rec.id); // 该边已使用
+    }
+  }
+
+  return { holder, chain, conflict: null, totalCount: sorted.length, replayedCount: chain.length };
+}
+
+/**
  * 核验单件道具。
  * @returns 结论、冲突信息、已重放的链 chain 等
  */
 function verifyProp(prop, allRecords, endMinute) {
-  const records = sortRecords(allRecords.filter((r) => r.propId === prop.id));
+  const records = allRecords.filter((r) => r.propId === prop.id);
 
   if (records.length === 0) {
     return {
@@ -66,90 +149,34 @@ function verifyProp(prop, allRecords, endMinute) {
     };
   }
 
-  const chain = [];
-  let holder = WAREHOUSE;
-  let i = 0;
+  const replay = replayRecords(records);
 
-  while (i < records.length) {
-    const minute = records[i].minute;
-
-    // 本分钟全部记录，作为尚未使用的有向边集合
-    let pool = [];
-    while (i < records.length && records[i].minute === minute) {
-      pool.push(records[i]);
-      i += 1;
-    }
-
-    // 同一分钟内从当前持有人沿“唯一出边”反复归约，与录入顺序无关
-    while (pool.length > 0) {
-      const continuable = pool.filter((r) => r.from === holder);
-
-      if (continuable.length === 0) {
-        return {
-          propId: prop.id,
-          status: STATUS.CONFLICT,
-          holder,
-          chain,
-          timeline: buildTimeline(chain, holder, minute, minute),
-          conflict: {
-            type: CONFLICT.BROKEN,
-            minute,
-            holder,
-            records: pool.map((r) => r.id),
-            recordRefs: pool,
-            reason:
-              `第${minute}分钟道具当前由「${holder}」持有，但该分钟尚未执行的交接记录为` +
-              `${pool.map(describeRecord).join('；')}——交出者均不是「${holder}」，` +
-              `交接链在此断裂，本分钟剩余记录及之后分钟的记录均无法接续。`,
-          },
-          totalCount: records.length,
-          replayedCount: chain.length,
-        };
-      }
-
-      if (continuable.length > 1) {
-        return {
-          propId: prop.id,
-          status: STATUS.CONFLICT,
-          holder,
-          chain,
-          timeline: buildTimeline(chain, holder, minute, minute),
-          conflict: {
-            type: CONFLICT.AMBIGUOUS,
-            minute,
-            holder,
-            records: continuable.map((r) => r.id),
-            recordRefs: continuable,
-            reason:
-              `第${minute}分钟道具由「${holder}」持有，同时存在 ${continuable.length} 条` +
-              `交出者为「${holder}」的可接续记录（${continuable
-                .map((r) => `${r.from} → ${r.to}`)
-                .join('；')}），交接链不唯一，无法判定道具实际交给了谁。`,
-          },
-          totalCount: records.length,
-          replayedCount: chain.length,
-        };
-      }
-
-      const rec = continuable[0];
-      chain.push(rec);
-      holder = rec.to;
-      pool = pool.filter((r) => r.id !== rec.id); // 该边已使用
-    }
+  if (replay.conflict) {
+    const minute = replay.conflict.minute;
+    return {
+      propId: prop.id,
+      status: STATUS.CONFLICT,
+      holder: replay.holder,
+      chain: replay.chain,
+      timeline: buildTimeline(replay.chain, replay.holder, minute, minute),
+      conflict: replay.conflict,
+      totalCount: replay.totalCount,
+      replayedCount: replay.replayedCount,
+    };
   }
 
-  const returned = holder === WAREHOUSE;
+  const returned = replay.holder === WAREHOUSE;
   return {
     propId: prop.id,
     status: returned ? STATUS.RETURNED : STATUS.NOT_RETURNED,
-    holder,
-    chain,
+    holder: replay.holder,
+    chain: replay.chain,
     timeline: returned
-      ? buildTimeline(chain, null, endMinute)
-      : buildTimeline(chain, holder, endMinute),
+      ? buildTimeline(replay.chain, null, endMinute)
+      : buildTimeline(replay.chain, replay.holder, endMinute),
     conflict: null,
-    totalCount: records.length,
-    replayedCount: chain.length,
+    totalCount: replay.totalCount,
+    replayedCount: replay.replayedCount,
   };
 }
 
@@ -223,6 +250,7 @@ module.exports = {
   CONFLICT,
   STATUS,
   sortRecords,
+  replayRecords,
   verifyProp,
   verifyAll,
 };

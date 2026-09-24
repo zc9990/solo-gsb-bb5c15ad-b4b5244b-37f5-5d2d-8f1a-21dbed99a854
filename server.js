@@ -5,6 +5,7 @@ const path = require('path');
 
 const store = require('./src/store');
 const { verifyAll } = require('./src/verify');
+const { stocktake } = require('./src/stocktake');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -43,6 +44,49 @@ app.get('/api/state', (req, res) => {
 
 app.get('/api/verify', (req, res) => {
   res.json(verifyAll(store.getData()));
+});
+
+/* ---------------- 现场盘点（即时结果，不改写交接记录） ---------------- */
+
+const STOCKTAKE_MAX_ROWS = 500;
+
+app.post('/api/stocktake', (req, res) => {
+  const body = req.body || {};
+
+  let minute;
+  try {
+    minute = parseMinute(body.minute, '盘点分钟');
+  } catch (err) {
+    return badRequest(res, err.message);
+  }
+
+  if (!Array.isArray(body.rows)) {
+    return badRequest(res, '盘点行（rows）必须是数组');
+  }
+  if (body.rows.length > STOCKTAKE_MAX_ROWS) {
+    return badRequest(res, `盘点行最多 ${STOCKTAKE_MAX_ROWS} 行`);
+  }
+
+  // 名称与实物持有人均必填；完全空白的行直接忽略
+  const rows = [];
+  for (let i = 0; i < body.rows.length; i += 1) {
+    const r = body.rows[i] || {};
+    const name = typeof r.name === 'string' ? r.name.trim() : '';
+    const holder = typeof r.holder === 'string' ? r.holder.trim() : '';
+    if (!name && !holder) continue;
+    if (!name) return badRequest(res, `第 ${i + 1} 行缺少道具名称`);
+    if (!holder) return badRequest(res, `第 ${i + 1} 行缺少实物持有人`);
+    if (name.length > 40) return badRequest(res, `第 ${i + 1} 行道具名称过长（最多 40 字）`);
+    if (holder.length > 30) return badRequest(res, `第 ${i + 1} 行实物持有人过长（最多 30 字）`);
+    rows.push({ name, holder });
+  }
+
+  if (rows.length === 0) {
+    return badRequest(res, '请至少填写一行盘点（道具名称 + 实物持有人）');
+  }
+
+  // 只读当前数据即时重放，不写入、不改写任何交接记录
+  res.json(stocktake(store.getData(), minute, rows));
 });
 
 /* ---------------- 道具 CRUD ---------------- */

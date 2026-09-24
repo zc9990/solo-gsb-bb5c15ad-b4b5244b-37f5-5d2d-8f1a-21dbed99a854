@@ -5,6 +5,7 @@
 let state = { props: [], records: [], verification: null, warehouse: '仓库' };
 let editingPropId = null;
 let editingRecordId = null;
+let stocktakeResult = null; // 最近一次现场盘点的即时结果
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
@@ -31,6 +32,12 @@ const els = {
   recordNote: $('#record-note'),
   peopleList: $('#people-list'),
   toast: $('#toast'),
+  stocktakeDialog: $('#stocktake-dialog'),
+  stocktakeForm: $('#stocktake-form'),
+  stMinuteInput: $('#st-minute-input'),
+  stRows: $('#st-rows'),
+  stocktakePanel: $('#stocktake-panel'),
+  stocktakeTableBody: document.querySelector('#stocktake-table tbody'),
 };
 
 const STATUS_TEXT = {
@@ -275,6 +282,11 @@ function renderPropSelect() {
     .join('');
 }
 
+function renderPropNameList() {
+  const dl = $('#prop-name-list');
+  if (dl) dl.innerHTML = state.props.map((p) => `<option value="${esc(p.name)}"></option>`).join('');
+}
+
 function render() {
   els.whName.textContent = state.warehouse;
   renderSummary();
@@ -283,6 +295,7 @@ function render() {
   renderRecordTable();
   renderPeopleList();
   renderPropSelect();
+  renderPropNameList();
 }
 
 /* ==================== 弹窗 ==================== */
@@ -417,7 +430,161 @@ function locateRecord(id) {
   row.classList.add('flash');
 }
 
+/* ==================== 现场盘点 ==================== */
+
+const ST_CATEGORY = {
+  MATCH: { cls: 'st-match', badge: '✓ 一致' },
+  MISMATCH: { cls: 'st-mismatch', badge: '✕ 持有人不符' },
+  DUPLICATE: { cls: 'st-duplicate', badge: '⧉ 重复录入' },
+  OFF_BOOK: { cls: 'st-offbook', badge: '？ 账外' },
+  NOT_COUNTED: { cls: 'st-notcounted', badge: '— 未盘' },
+  UNDETERMINED: { cls: 'st-undetermined', badge: '? 无法判定' },
+};
+
+function stRowHtml(name = '', holder = '') {
+  return `
+    <div class="st-row">
+      <input type="text" class="st-name" maxlength="40" list="prop-name-list" placeholder="选择或输入道具名称" value="${esc(name)}" />
+      <input type="text" class="st-holder" maxlength="30" list="people-list" placeholder="现场实物持有人" value="${esc(holder)}" />
+      <button type="button" class="btn btn-sm btn-danger st-del-row">删除</button>
+    </div>`;
+}
+
+function resetStocktakeDialog() {
+  els.stMinuteInput.value = '';
+  els.stRows.innerHTML = stRowHtml() + stRowHtml() + stRowHtml();
+}
+
+function openStocktakeDialog() {
+  resetStocktakeDialog();
+  els.stocktakeDialog.showModal();
+  els.stMinuteInput.focus();
+}
+
+function collectStocktakeRows() {
+  const rows = [...els.stRows.querySelectorAll('.st-row')].map((rowEl) => ({
+    name: rowEl.querySelector('.st-name').value.trim(),
+    holder: rowEl.querySelector('.st-holder').value.trim(),
+  }));
+  // 完全空白行直接剔除；其余行要求名称与持有人都非空（由服务端兜底校验）
+  return rows.filter((r) => r.name || r.holder);
+}
+
+function stConflictText(c) {
+  if (!c) return '';
+  const typeText = c.type === 'AMBIGUOUS' ? '同一分钟多条可接续' : '交接链断裂（无法接续）';
+  return `第${c.minute}分钟${typeText}：${c.reason}`;
+}
+
+function renderStocktakeResult(result) {
+  $('#st-minute').textContent = result.cutoffMinute;
+
+  const s = result.summary;
+  const chips = [
+    { n: s.match, text: '一致', cls: 'chip-match' },
+    { n: s.mismatch, text: '持有人不符', cls: 'chip-mismatch' },
+    { n: s.duplicate, text: '重复录入', cls: 'chip-duplicate' },
+    { n: s.offBook, text: '账外', cls: 'chip-offbook' },
+    { n: s.notCounted, text: '未盘', cls: 'chip-notcounted' },
+    { n: s.undetermined, text: '无法判定', cls: 'chip-undetermined' },
+  ];
+  $('#st-summary').innerHTML =
+    chips.map((c) => `<span class="st-chip ${c.cls}"><strong>${c.n}</strong> ${c.text}</span>`).join('') +
+    `<span class="st-total">共盘点 ${s.totalRows} 行 / 已登记道具 ${s.totalProps} 件</span>`;
+
+  els.stocktakeTableBody.innerHTML = result.entries.map((e) => {
+    const meta = ST_CATEGORY[e.category];
+    let note = '';
+    if (e.category === 'MATCH') note = `实物与账面均为「${e.bookHolder}」`;
+    else if (e.category === 'MISMATCH') note = `账面持有人应为「${e.bookHolder}」，与实物持有人不符`;
+    else if (e.category === 'DUPLICATE') {
+      const tail = e.registered
+        ? (e.conflict ? '，账面无法判定' : `，账面持有人「${e.bookHolder}」`)
+        : '，且该名称未登记（账外）';
+      note = `同名第 ${e.duplicate.index}/${e.duplicate.total} 次录入，单列为重复录入，不以后项覆盖${tail}`;
+    } else if (e.category === 'OFF_BOOK') note = '名称未在道具清单中登记，无法核对账面';
+    else if (e.category === 'NOT_COUNTED') {
+      note = e.conflict
+        ? `盘点表中未填写该道具（未盘）；账面：${stConflictText(e.conflict)}`
+        : `盘点表中未填写该道具（未盘）；账面持有人「${e.bookHolder}」`;
+    } else if (e.category === 'UNDETERMINED') {
+      note = stConflictText(e.conflict);
+    }
+    return `
+      <tr class="${meta.cls}">
+        <td class="cell-minute">${e.line == null ? '—' : e.line}</td>
+        <td><strong>${esc(e.propName)}</strong></td>
+        <td>${e.actualHolder == null ? '<span class="muted">（未填写）</span>' : esc(e.actualHolder)}</td>
+        <td>${e.bookHolder == null ? '<span class="muted">—</span>' : esc(e.bookHolder)}</td>
+        <td><span class="st-badge">${meta.badge}</span></td>
+        <td class="st-note-cell">${esc(note)}</td>
+      </tr>`;
+  }).join('');
+
+  els.stocktakePanel.classList.remove('hidden');
+  els.stocktakePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function submitStocktake() {
+  const minuteVal = els.stMinuteInput.value;
+  const minute = Number(minuteVal);
+  if (minuteVal === '' || !Number.isInteger(minute) || minute < 0) {
+    toast('请输入不小于 0 的整数盘点分钟', true);
+    return;
+  }
+  const rows = collectStocktakeRows();
+  if (rows.length === 0) {
+    toast('请至少填写一行盘点（道具名称 + 实物持有人）', true);
+    return;
+  }
+  try {
+    const result = await api('/api/stocktake', {
+      method: 'POST',
+      body: JSON.stringify({ minute, rows }),
+    });
+    stocktakeResult = result;
+    els.stocktakeDialog.close();
+    renderStocktakeResult(result);
+    const s = result.summary;
+    toast(
+      s.hasDifference
+        ? `盘点完成：发现 ${s.mismatch + s.duplicate + s.offBook + s.notCounted + s.undetermined} 项账实差异`
+        : '盘点完成：账实全部一致',
+      s.hasDifference
+    );
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function bindStocktakeEvents() {
+  $('#btn-stocktake').addEventListener('click', openStocktakeDialog);
+  $('#btn-stocktake-again').addEventListener('click', openStocktakeDialog);
+  $('#btn-stocktake-close').addEventListener('click', () =>
+    els.stocktakePanel.classList.add('hidden'));
+  $('#st-add-row').addEventListener('click', () =>
+    els.stRows.insertAdjacentHTML('beforeend', stRowHtml()));
+
+  // 动态行的删除（事件委托）
+  els.stRows.addEventListener('click', (e) => {
+    const del = e.target.closest('.st-del-row');
+    if (!del) return;
+    const rowEl = del.closest('.st-row');
+    if (els.stRows.querySelectorAll('.st-row').length <= 1) {
+      rowEl.querySelectorAll('input').forEach((inp) => { inp.value = ''; });
+      return;
+    }
+    rowEl.remove();
+  });
+
+  els.stocktakeForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitStocktake();
+  });
+}
+
 /* ==================== 启动 ==================== */
 
 bindEvents();
+bindStocktakeEvents();
 loadState().catch((err) => toast(`加载数据失败：${err.message}`, true));

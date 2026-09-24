@@ -19,7 +19,8 @@
       <div class="topbar-actions">
         <button id="btn-add-prop" class="btn">＋ 录入道具</button>
         <button id="btn-add-record" class="btn btn-primary">＋ 录入交接记录</button>
-        <button id="btn-reverify" class="btn btn-accent" title="重新读取记录并按时间重放">↻ 重新核验</button>
+        <button id="btn-stocktake" class="btn btn-accent" title="演出中途现场盘点：选择分钟并逐行填写实物持有人">🧮 现场盘点</button>
+        <button id="btn-reverify" class="btn" title="重新读取记录并按时间重放">↻ 重新核验</button>
       </div>
     </div>
   </header>
@@ -76,6 +77,33 @@
         </div>
       </section>
     </div>
+
+    <!-- 现场盘点结果（提交后即时显示，不改变交接记录） -->
+    <section id="stocktake-panel" class="panel panel-stocktake hidden">
+      <div class="panel-head stocktake-head">
+        <h2>🧮 现场盘点结果 · 第 <span id="st-minute">-</span> 分钟（账实差异）</h2>
+        <div class="stocktake-head-actions">
+          <button id="btn-stocktake-again" class="btn btn-sm">重新盘点</button>
+          <button id="btn-stocktake-close" class="btn btn-sm">关闭</button>
+        </div>
+      </div>
+      <div class="stocktake-summary" id="st-summary"></div>
+      <div class="table-wrap">
+        <table class="table" id="stocktake-table">
+          <thead>
+            <tr>
+              <th class="col-line">行</th><th>道具名称</th><th>实物持有人</th>
+              <th>账面持有人</th><th>结论</th><th>说明</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="stocktake-note">
+        盘点只重放该分钟及以前的交接，在该分钟所有交接完成后取账面持有人；较晚分钟的冲突不影响本次盘点。
+        本结果为即时生成，<strong>不会改写任何交接记录</strong>。
+      </div>
+    </section>
   </main>
 
   <!-- 道具编辑弹窗 -->
@@ -131,6 +159,31 @@
       <div class="dialog-actions">
         <button type="button" class="btn" data-close>取消</button>
         <button type="submit" class="btn btn-primary" id="record-save">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 现场盘点弹窗 -->
+  <dialog id="stocktake-dialog" class="dialog dialog-wide">
+    <form method="dialog" id="stocktake-form">
+      <h3>演出中途 · 现场盘点</h3>
+      <p class="dialog-hint">
+        选择盘点分钟并逐行填写道具名称与现场实物持有人，提交后显示该时刻的账实差异。
+        服务端只重放该分钟及以前的交接，较晚的冲突不影响本次盘点，且不改写交接记录。
+      </p>
+      <label class="field field-stock-minute">
+        <span>盘点分钟 <em>*</em></span>
+        <input type="number" id="st-minute-input" min="0" step="1" required placeholder="如 5（非负整数）" />
+      </label>
+      <div class="st-rows-head">
+        <span>道具名称 <em>*</em></span><span>实物持有人 <em>*</em></span><span></span>
+      </div>
+      <div id="st-rows"></div>
+      <datalist id="prop-name-list"></datalist>
+      <button type="button" class="btn btn-sm btn-add-row" id="st-add-row">＋ 增加一行</button>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-close>取消</button>
+        <button type="submit" class="btn btn-primary" id="st-submit">提交盘点</button>
       </div>
     </form>
   </dialog>
