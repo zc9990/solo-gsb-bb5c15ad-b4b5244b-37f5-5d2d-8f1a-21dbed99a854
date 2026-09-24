@@ -19,7 +19,8 @@
       <div class="topbar-actions">
         <button id="btn-add-prop" class="btn">＋ 录入道具</button>
         <button id="btn-add-record" class="btn btn-primary">＋ 录入交接记录</button>
-        <button id="btn-reverify" class="btn btn-accent" title="重新读取记录并按时间重放">↻ 重新核验</button>
+        <button id="btn-inventory" class="btn btn-accent">🔍 现场盘点</button>
+        <button id="btn-reverify" class="btn" title="重新读取记录并按时间重放">↻ 重新核验</button>
       </div>
     </div>
   </header>
@@ -36,6 +37,27 @@
     </section>
 
     <div id="orphan-banner" class="banner banner-error hidden"></div>
+
+    <!-- 现场盘点结果（提交后即时展示，不保存、不改写交接记录） -->
+    <section id="inventory-panel" class="panel panel-inventory hidden">
+      <div class="panel-head inventory-head">
+        <h2>🔍 现场盘点结果 · 第 <span id="inv-minute">-</span> 分钟</h2>
+        <button type="button" class="btn btn-sm" id="btn-inv-close" title="关闭盘点结果">✕ 关闭</button>
+      </div>
+      <div class="inv-summary" id="inv-summary"></div>
+      <div id="inv-banner-ok" class="banner banner-ok hidden">该时刻账实完全一致。</div>
+      <div class="table-wrap">
+        <table class="table" id="inv-table">
+          <thead>
+            <tr>
+              <th class="col-rowno">#</th><th>道具名称</th><th>实物持有人</th>
+              <th>账面持有人</th><th>结论</th><th>说明</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
 
     <div class="grid">
       <!-- 左：核验结论与时间轴 -->
@@ -132,6 +154,33 @@
         <button type="button" class="btn" data-close>取消</button>
         <button type="submit" class="btn btn-primary" id="record-save">保存</button>
       </div>
+    </form>
+  </dialog>
+
+  <!-- 现场盘点弹窗 -->
+  <dialog id="inventory-dialog" class="dialog dialog-wide">
+    <form method="dialog" id="inventory-form">
+      <h3>演出中途现场盘点</h3>
+      <p class="dialog-tip">
+        选择盘点时刻（非负整数分钟），逐行填写道具名称与该时刻的<strong>实物持有人</strong>。
+        服务端只重放该分钟及以前的交接（该分钟全部交接完成后取账面持有人），晚于该时刻的冲突不影响本次盘点。
+        盘点仅生成即时结果，不会改写任何交接记录。
+      </p>
+      <label class="field field-minute-strong">
+        <span>盘点时刻 <em>*</em></span>
+        <input type="number" id="inv-minute-input" min="0" step="1" required placeholder="如 5" />
+      </label>
+      <div class="inv-rows-bar">
+        <span class="inv-rows-title">盘点行</span>
+        <button type="button" class="btn btn-sm" id="btn-inv-addrow">＋ 添加一行</button>
+        <button type="button" class="btn btn-sm" id="btn-inv-fillprops">按已登记道具补齐</button>
+      </div>
+      <div id="inv-rows" class="inv-rows"></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-close>取消</button>
+        <button type="submit" class="btn btn-primary" id="inv-submit">提交盘点</button>
+      </div>
+      <datalist id="prop-name-list"></datalist>
     </form>
   </dialog>
 

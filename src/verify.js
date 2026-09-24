@@ -47,25 +47,15 @@ function describeRecord(r) {
 }
 
 /**
- * 核验单件道具。
- * @returns 结论、冲突信息、已重放的链 chain 等
+ * 核心重放：对一件道具在目标时间窗内的记录，按分钟升序逐分钟、
+ * 在同一分钟内按“唯一可接续出边”反复归约（与录入顺序无关）。
+ * 调用方负责筛选记录——例如现场盘点只传入 minute <= 盘点分钟 的记录，
+ * 这样晚于盘点时刻的冲突不会影响该时刻的账面持有人。
+ *
+ * @param {Array} records 该道具已筛选并按分钟升序排列的记录
+ * @returns {{ok: boolean, holder: string|null, chain: Array, conflict: object|null}}
  */
-function verifyProp(prop, allRecords, endMinute) {
-  const records = sortRecords(allRecords.filter((r) => r.propId === prop.id));
-
-  if (records.length === 0) {
-    return {
-      propId: prop.id,
-      status: STATUS.NO_RECORDS,
-      holder: WAREHOUSE,
-      chain: [],
-      timeline: buildTimeline([], WAREHOUSE, endMinute),
-      conflict: null,
-      totalCount: 0,
-      replayedCount: 0,
-    };
-  }
-
+function replayPropRecords(records) {
   const chain = [];
   let holder = WAREHOUSE;
   let i = 0;
@@ -86,11 +76,9 @@ function verifyProp(prop, allRecords, endMinute) {
 
       if (continuable.length === 0) {
         return {
-          propId: prop.id,
-          status: STATUS.CONFLICT,
+          ok: false,
           holder,
           chain,
-          timeline: buildTimeline(chain, holder, minute, minute),
           conflict: {
             type: CONFLICT.BROKEN,
             minute,
@@ -102,18 +90,14 @@ function verifyProp(prop, allRecords, endMinute) {
               `${pool.map(describeRecord).join('；')}——交出者均不是「${holder}」，` +
               `交接链在此断裂，本分钟剩余记录及之后分钟的记录均无法接续。`,
           },
-          totalCount: records.length,
-          replayedCount: chain.length,
         };
       }
 
       if (continuable.length > 1) {
         return {
-          propId: prop.id,
-          status: STATUS.CONFLICT,
+          ok: false,
           holder,
           chain,
-          timeline: buildTimeline(chain, holder, minute, minute),
           conflict: {
             type: CONFLICT.AMBIGUOUS,
             minute,
@@ -126,8 +110,6 @@ function verifyProp(prop, allRecords, endMinute) {
                 .map((r) => `${r.from} → ${r.to}`)
                 .join('；')}），交接链不唯一，无法判定道具实际交给了谁。`,
           },
-          totalCount: records.length,
-          replayedCount: chain.length,
         };
       }
 
@@ -138,18 +120,57 @@ function verifyProp(prop, allRecords, endMinute) {
     }
   }
 
-  const returned = holder === WAREHOUSE;
+  return { ok: true, holder, chain, conflict: null };
+}
+
+/**
+ * 核验单件道具。
+ * @returns 结论、冲突信息、已重放的链 chain 等
+ */
+function verifyProp(prop, allRecords, endMinute) {
+  const records = sortRecords(allRecords.filter((r) => r.propId === prop.id));
+
+  if (records.length === 0) {
+    return {
+      propId: prop.id,
+      status: STATUS.NO_RECORDS,
+      holder: WAREHOUSE,
+      chain: [],
+      timeline: buildTimeline([], WAREHOUSE, endMinute),
+      conflict: null,
+      totalCount: 0,
+      replayedCount: 0,
+    };
+  }
+
+  const replay = replayPropRecords(records);
+
+  if (!replay.ok) {
+    const conflictMinute = replay.conflict.minute;
+    return {
+      propId: prop.id,
+      status: STATUS.CONFLICT,
+      holder: replay.holder,
+      chain: replay.chain,
+      timeline: buildTimeline(replay.chain, replay.holder, conflictMinute, conflictMinute),
+      conflict: replay.conflict,
+      totalCount: records.length,
+      replayedCount: replay.chain.length,
+    };
+  }
+
+  const returned = replay.holder === WAREHOUSE;
   return {
     propId: prop.id,
     status: returned ? STATUS.RETURNED : STATUS.NOT_RETURNED,
-    holder,
-    chain,
+    holder: replay.holder,
+    chain: replay.chain,
     timeline: returned
-      ? buildTimeline(chain, null, endMinute)
-      : buildTimeline(chain, holder, endMinute),
+      ? buildTimeline(replay.chain, null, endMinute)
+      : buildTimeline(replay.chain, replay.holder, endMinute),
     conflict: null,
     totalCount: records.length,
-    replayedCount: chain.length,
+    replayedCount: replay.chain.length,
   };
 }
 
@@ -188,6 +209,31 @@ function buildTimeline(chain, openHolder, openEndMinute, conflictMinute) {
 }
 
 /**
+ * 现场盘点：求每件道具在「第 atMinute 分钟全部交接完成后」的账面持有人。
+ * 只重放 minute <= atMinute 的记录（该分钟的全部交接先归约完毕再取持有人），
+ * 晚于该分钟的记录一律不参与——因此较晚的冲突不影响本次盘点。
+ *
+ * @param {{props: Array, records: Array}} data
+ * @param {number} atMinute 非负整数分钟
+ * @returns {Map<string, {holder: string|null, conflict: object|null}>}
+ *          key 为 propId；holder 为 null 表示该时刻交接链已冲突、账面持有人无法判定
+ */
+function holdingsAt(data, atMinute) {
+  const props = data.props || [];
+  const records = (data.records || []).filter(
+    (r) => Number(r.minute) <= atMinute
+  );
+
+  const result = new Map();
+  for (const prop of props) {
+    const propRecords = sortRecords(records.filter((r) => r.propId === prop.id));
+    const replay = replayPropRecords(propRecords);
+    result.set(prop.id, { holder: replay.ok ? replay.holder : null, conflict: replay.conflict });
+  }
+  return result;
+}
+
+/**
  * 核验全部道具。
  * @param {{props: Array, records: Array}} data
  */
@@ -223,6 +269,8 @@ module.exports = {
   CONFLICT,
   STATUS,
   sortRecords,
+  replayPropRecords,
   verifyProp,
+  holdingsAt,
   verifyAll,
 };

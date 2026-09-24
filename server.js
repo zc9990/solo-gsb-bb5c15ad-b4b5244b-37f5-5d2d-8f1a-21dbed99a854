@@ -5,6 +5,7 @@ const path = require('path');
 
 const store = require('./src/store');
 const { verifyAll } = require('./src/verify');
+const { checkInventory } = require('./src/inventory');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -44,6 +45,46 @@ app.get('/api/state', (req, res) => {
 app.get('/api/verify', (req, res) => {
   res.json(verifyAll(store.getData()));
 });
+
+/* ---------------- 现场盘点（只读，即时结果，不改写交接记录） ---------------- */
+
+app.post('/api/inventory/check', asyncRoute((req, res) => {
+  const body = req.body || {};
+
+  let minute;
+  try {
+    minute = parseMinute(body.minute, '盘点时刻（分钟）');
+  } catch (err) {
+    return badRequest(res, err.message);
+  }
+
+  if (!Array.isArray(body.rows)) {
+    return badRequest(res, '盘点行（rows）必须是数组');
+  }
+  if (body.rows.length === 0) {
+    return badRequest(res, '请至少填写一行盘点记录');
+  }
+  if (body.rows.length > 500) {
+    return badRequest(res, '单次盘点最多 500 行');
+  }
+
+  const rows = [];
+  for (let i = 0; i < body.rows.length; i += 1) {
+    const r = body.rows[i] || {};
+    try {
+      const name = nonEmpty(r.name, `第 ${i + 1} 行道具名称`);
+      const holder = nonEmpty(r.holder, `第 ${i + 1} 行实物持有人`);
+      if (name.length > 40) throw new Error(`第 ${i + 1} 行道具名称最长 40 个字符`);
+      if (holder.length > 30) throw new Error(`第 ${i + 1} 行实物持有人最长 30 个字符`);
+      rows.push({ name, holder });
+    } catch (err) {
+      return badRequest(res, err.message);
+    }
+  }
+
+  // 纯读取 + 即时重放，不写入任何数据
+  res.json(checkInventory(store.getData(), minute, rows));
+}));
 
 /* ---------------- 道具 CRUD ---------------- */
 

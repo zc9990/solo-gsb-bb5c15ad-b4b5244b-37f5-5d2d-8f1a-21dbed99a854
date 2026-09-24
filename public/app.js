@@ -31,6 +31,21 @@ const els = {
   recordNote: $('#record-note'),
   peopleList: $('#people-list'),
   toast: $('#toast'),
+  // 现场盘点
+  btnInventory: $('#btn-inventory'),
+  invDialog: $('#inventory-dialog'),
+  invForm: $('#inventory-form'),
+  invMinuteInput: $('#inv-minute-input'),
+  invRows: $('#inv-rows'),
+  btnInvAddRow: $('#btn-inv-addrow'),
+  btnInvFillProps: $('#btn-inv-fillprops'),
+  propNameList: $('#prop-name-list'),
+  invPanel: $('#inventory-panel'),
+  invMinuteLabel: $('#inv-minute'),
+  invSummary: $('#inv-summary'),
+  invBannerOk: $('#inv-banner-ok'),
+  invTableBody: document.querySelector('#inv-table tbody'),
+  btnInvClose: $('#btn-inv-close'),
 };
 
 const STATUS_TEXT = {
@@ -283,6 +298,7 @@ function render() {
   renderRecordTable();
   renderPeopleList();
   renderPropSelect();
+  renderPropNameList();
 }
 
 /* ==================== 弹窗 ==================== */
@@ -339,6 +355,35 @@ function bindEvents() {
   $('#btn-add-record').addEventListener('click', () => openRecordDialog());
   $('#btn-reverify').addEventListener('click', () =>
     safe(loadState, '已按时间重新重放全部交接记录，核验完成'));
+
+  // 现场盘点
+  els.btnInventory.addEventListener('click', openInventoryDialog);
+  els.btnInvAddRow.addEventListener('click', () => {
+    els.invRows.insertAdjacentHTML('beforeend', invRowHtml());
+    els.invRows.querySelector('.inv-row:last-child .inv-name').focus();
+  });
+  els.btnInvFillProps.addEventListener('click', () => {
+    // 以已登记道具为准补齐：保留已填写的行，再追加尚未出现的道具行（持有人留空待填）
+    const filled = collectInvRows();
+    const usedNames = new Set(filled.map((r) => r.name));
+    const extra = state.props.filter((p) => !usedNames.has(p.name)).map((p) => invRowHtml(p.name, ''));
+    els.invRows.innerHTML = filled.map((r) => invRowHtml(r.name, r.holder)).join('') + extra.join('');
+    if (els.invRows.children.length === 0) resetInvRows();
+  });
+  els.invRows.addEventListener('click', (e) => {
+    const del = e.target.closest?.('.inv-del');
+    if (!del) return;
+    if (els.invRows.children.length <= 1) {
+      toast('至少保留一行；要放弃盘点请点「取消」', true);
+      return;
+    }
+    del.closest('.inv-row').remove();
+  });
+  els.invForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    submitInventory();
+  });
+  els.btnInvClose.addEventListener('click', () => els.invPanel.classList.add('hidden'));
 
   document.querySelectorAll('[data-close]').forEach((b) =>
     b.addEventListener('click', () => b.closest('dialog').close()));
@@ -415,6 +460,129 @@ function locateRecord(id) {
   row.classList.remove('flash');
   void row.offsetWidth; // 重启动画
   row.classList.add('flash');
+}
+
+/* ==================== 现场盘点 ==================== */
+
+const INV_STATUS_TEXT = {
+  MATCH: { cls: 'inv-ok', text: '✓ 一致' },
+  MISMATCH: { cls: 'inv-bad', text: '✕ 持有人不符' },
+  UNKNOWN: { cls: 'inv-bad', text: '？ 无法判定' },
+  UNREGISTERED: { cls: 'inv-warn', text: '账外' },
+  DUPLICATE: { cls: 'inv-neutral', text: '重复录入' },
+  MISSING: { cls: 'inv-muted', text: '未盘' },
+};
+
+let invResult = null;
+
+function renderPropNameList() {
+  els.propNameList.innerHTML = state.props
+    .map((p) => `<option value="${esc(p.name)}"></option>`)
+    .join('');
+}
+
+function invRowHtml(name = '', holder = '') {
+  return `
+    <div class="inv-row">
+      <input type="text" class="inv-name" maxlength="40" placeholder="道具名称" list="prop-name-list" value="${esc(name)}" />
+      <input type="text" class="inv-holder" maxlength="30" list="people-list" placeholder="实物持有人" value="${esc(holder)}" />
+      <button type="button" class="btn btn-sm btn-danger inv-del" title="删除此行">✕</button>
+    </div>`;
+}
+
+function resetInvRows() {
+  els.invRows.innerHTML = [invRowHtml(), invRowHtml(), invRowHtml()].join('');
+}
+
+function openInventoryDialog() {
+  els.invMinuteInput.value = state.verification.endMinute || 0;
+  resetInvRows();
+  els.invDialog.showModal();
+  els.invMinuteInput.focus();
+}
+
+function collectInvRows() {
+  return [...els.invRows.querySelectorAll('.inv-row')]
+    .map((row) => ({
+      name: row.querySelector('.inv-name').value.trim(),
+      holder: row.querySelector('.inv-holder').value.trim(),
+    }))
+    .filter((r) => r.name || r.holder);
+}
+
+function renderInventoryResult(result) {
+  invResult = result;
+  els.invMinuteLabel.textContent = result.atMinute;
+
+  const s = result.summary;
+  const chips = [
+    [`共 ${s.total} 行`, ''],
+    [`一致 ${s.match}`, 'chip-ok'],
+    [`持有人不符 ${s.mismatch}`, 'chip-bad'],
+    [`无法判定 ${s.unknown}`, 'chip-bad'],
+    [`账外 ${s.unregistered}`, 'chip-warn'],
+    [`重复录入 ${s.duplicate}`, 'chip-neutral'],
+    [`未盘 ${s.missing}`, 'chip-muted'],
+    [`账实差异 ${s.discrepancy}`, s.discrepancy > 0 ? 'chip-bad' : 'chip-ok'],
+  ];
+  els.invSummary.innerHTML = chips
+    .map(([text, cls]) => `<span class="inv-chip ${cls}">${text}</span>`)
+    .join('');
+
+  els.invBannerOk.classList.toggle('hidden', s.discrepancy !== 0);
+
+  const order = { MISMATCH: 0, UNKNOWN: 1, UNREGISTERED: 2, MISSING: 3, DUPLICATE: 4, MATCH: 5 };
+  const rows = [...result.rows].sort(
+    (a, b) => order[a.status] - order[b.status] || (a.rowNo ?? 1e9) - (b.rowNo ?? 1e9)
+  );
+
+  els.invTableBody.innerHTML = rows.map((r) => {
+    const st = INV_STATUS_TEXT[r.status];
+    const dash = '<span class="inv-dash">—</span>';
+    const rowNo = r.rowNo == null ? '<span class="inv-dash" title="系统补列的未盘道具">补列</span>' : r.rowNo;
+    return `
+      <tr class="inv-row-${r.status}">
+        <td class="cell-minute">${rowNo}</td>
+        <td><strong>${esc(r.name)}</strong></td>
+        <td>${r.actualHolder == null ? dash : esc(r.actualHolder)}</td>
+        <td>${r.bookHolder == null ? dash : esc(r.bookHolder)}</td>
+        <td><span class="inv-badge ${st.cls}">${st.text}</span></td>
+        <td class="inv-note">${esc(r.note)}</td>
+      </tr>`;
+  }).join('');
+
+  els.invPanel.classList.remove('hidden');
+  els.invPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function submitInventory() {
+  const minute = Number(els.invMinuteInput.value);
+  if (!Number.isInteger(minute) || minute < 0) {
+    toast('盘点时刻必须是不小于 0 的整数（分钟）', true);
+    return;
+  }
+  const rows = collectInvRows();
+  if (rows.length === 0) {
+    toast('请至少填写一行盘点记录（道具名称 + 实物持有人）', true);
+    return;
+  }
+  const empty = rows.find((r) => !r.name || !r.holder);
+  if (empty) {
+    toast('每行的道具名称与实物持有人都必须填写；完全空白的行请删除', true);
+    return;
+  }
+
+  try {
+    const result = await api('/api/inventory/check', {
+      method: 'POST',
+      body: JSON.stringify({ minute, rows }),
+    });
+    els.invDialog.close();
+    renderInventoryResult(result);
+    toast('盘点完成（结果仅本次有效，未改动交接记录）');
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 /* ==================== 启动 ==================== */
